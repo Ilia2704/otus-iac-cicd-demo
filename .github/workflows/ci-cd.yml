@@ -5,6 +5,16 @@ on:
   push:
     branches:
       - main
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Deploy or destroy the demo infrastructure
+        required: true
+        default: deploy
+        type: choice
+        options:
+          - deploy
+          - destroy
 
 permissions:
   contents: read
@@ -30,7 +40,7 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Restore Terraform state
-        if: github.event_name == 'push'
+        if: github.event_name != 'pull_request'
         uses: actions/cache/restore@v6
         with:
           path: |
@@ -59,6 +69,7 @@ jobs:
         run: terraform validate
 
       - name: Set up Python
+        if: inputs.operation != 'destroy'
         uses: actions/setup-python@v7
         with:
           python-version: "3.12"
@@ -66,26 +77,38 @@ jobs:
           cache-dependency-path: tests/requirements.txt
 
       - name: Run unit tests
+        if: inputs.operation != 'destroy'
         run: |
           pip install --no-cache-dir -r tests/requirements.txt
           pytest -q tests/test_unit.py
 
       - name: Build application image
+        if: inputs.operation != 'destroy'
         run: docker build --tag "sentiment-api:${GITHUB_SHA}" app
 
       - name: Plan infrastructure
-        if: github.event_name == 'push'
+        if: github.event_name == 'push' || inputs.operation == 'deploy'
         working-directory: infra
         run: terraform plan -input=false -out=tfplan
 
       - name: Apply infrastructure
-        if: github.event_name == 'push'
+        if: github.event_name == 'push' || inputs.operation == 'deploy'
         id: apply
         working-directory: infra
         run: terraform apply -auto-approve tfplan
 
+      - name: Verify Terraform state for cleanup
+        if: inputs.operation == 'destroy'
+        run: test -s infra/terraform.tfstate
+
+      - name: Destroy demo infrastructure
+        if: inputs.operation == 'destroy'
+        id: destroy
+        working-directory: infra
+        run: terraform destroy -input=false -auto-approve
+
       - name: Save Terraform state
-        if: always() && github.event_name == 'push' && steps.apply.outcome != 'skipped'
+        if: always() && (steps.apply.outcome != 'skipped' || steps.destroy.outcome != 'skipped')
         uses: actions/cache/save@v6
         with:
           path: |
@@ -94,13 +117,13 @@ jobs:
           key: terraform-state-${{ github.run_id }}
 
       - name: Read VM address
-        if: github.event_name == 'push'
+        if: github.event_name == 'push' || inputs.operation == 'deploy'
         id: vm
         working-directory: infra
         run: echo "ip=$(terraform output -raw vm_external_ip)" >> "$GITHUB_OUTPUT"
 
       - name: Prepare SSH
-        if: github.event_name == 'push'
+        if: github.event_name == 'push' || inputs.operation == 'deploy'
         env:
           SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
           VM_IP: ${{ steps.vm.outputs.ip }}
@@ -115,7 +138,7 @@ jobs:
           test -s ~/.ssh/known_hosts
 
       - name: Deploy application
-        if: github.event_name == 'push'
+        if: github.event_name == 'push' || inputs.operation == 'deploy'
         env:
           VM_IP: ${{ steps.vm.outputs.ip }}
         run: |
@@ -125,7 +148,7 @@ jobs:
           ssh ubuntu@"$VM_IP" "sudo cloud-init status --wait && chmod +x /tmp/deploy_app.sh && sudo /tmp/deploy_app.sh /tmp/sentiment-api.tar.gz sentiment-api:${GITHUB_SHA}"
 
       - name: Run real Qwen smoke test
-        if: github.event_name == 'push'
+        if: github.event_name == 'push' || inputs.operation == 'deploy'
         env:
           APP_URL: http://${{ steps.vm.outputs.ip }}:8000
         run: python scripts/e2e_test.py

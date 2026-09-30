@@ -16,5 +16,5 @@ runcmd:
     -v ollama-data:/root/.ollama
     ollama/ollama
   - sh -c 'for i in $(seq 1 60); do docker exec ollama ollama list && exit 0; sleep 2; done; exit 1'
-  - docker exec ollama ollama pull qwen3:0.6b
+  - sh -c 'for i in $(seq 1 5); do docker exec ollama ollama pull qwen3:0.6b && exit 0; sleep 10; done; exit 1'
   - docker exec ollama ollama list

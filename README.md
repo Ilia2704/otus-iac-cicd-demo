@@ -116,7 +116,7 @@ validate -> tests -> build -> infra -> deploy -> smoke
 2. запускает маленькие unit tests;
 3. собирает Docker image приложения с тегом commit SHA.
 
-При push в ветку `main` после этих проверок workflow дополнительно:
+При push в ветку `main` или ручном запуске с операцией `deploy` workflow дополнительно:
 
 1. восстанавливает учебный локальный Terraform state из GitHub Actions cache;
 2. выполняет `terraform plan` и `terraform apply`;
@@ -138,6 +138,22 @@ validate -> tests -> build -> infra -> deploy -> smoke
 - `SSH_PRIVATE_KEY`
 
 `SSH_PUBLIC_KEY` должен содержать сам публичный ключ, а не путь к файлу.
+
+Ручной deploy после добавления свежего `YC_TOKEN`:
+
+```bash
+gh workflow run ci-cd.yml -f operation=deploy
+gh run watch
+```
+
+После демонстрации удалите все ресурсы именно этого Terraform-проекта:
+
+```bash
+gh workflow run ci-cd.yml -f operation=destroy
+gh run watch
+```
+
+Cleanup восстанавливает Terraform state из GitHub Actions cache и удаляет VM, disk, network, subnet, security group, service account и bucket. Он намеренно не удаляет посторонние VM из Yandex Cloud folder.
 
 ## Что было бы иначе в production
 
