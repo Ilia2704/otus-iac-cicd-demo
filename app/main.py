@@ -34,13 +34,20 @@ async def health():
 @app.post("/sentiment", response_model=SentimentResponse)
 async def sentiment(request: SentimentRequest):
     prompt = (
-        "You are a sentiment classifier.\n\n"
-        "Classify the text as exactly one of:\n\n"
-        "POSITIVE\n"
-        "NEGATIVE\n"
-        "NEUTRAL\n\n"
-        "Return only one uppercase label.\n\n"
-        f"Text:\n{request.text}"
+        "Classify the sentiment of the final text.\n\n"
+        "Label meanings:\n"
+        "POSITIVE: praise, love, happiness, satisfaction, or approval.\n"
+        "NEGATIVE: criticism, hate, anger, disappointment, or disapproval.\n"
+        "NEUTRAL: factual text without positive or negative emotion.\n\n"
+        "Examples:\n"
+        "Text: I love this.\n"
+        "Label: POSITIVE\n\n"
+        "Text: I hate this.\n"
+        "Label: NEGATIVE\n\n"
+        "Text: The package arrived on Tuesday.\n"
+        "Label: NEUTRAL\n\n"
+        f"Final text: {request.text}\n"
+        "Label:"
     )
 
     payload = {
