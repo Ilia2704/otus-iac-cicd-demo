@@ -1,0 +1,212 @@
+ДЕМО: TERRAFORM + GITHUB ACTIONS + YANDEX CLOUD + QWEN
+======================================================
+
+Выполнять команды из корня репозитория:
+
+cd /Users/newuser/Documents/OTUS/2909/otus_iac_cicd_demo
+
+
+1. ПРОВЕРИТЬ АВТОРИЗАЦИЮ
+------------------------
+
+yc version
+yc config profile list
+gh auth status
+
+Проверяет установку Yandex Cloud CLI, активный профиль и вход в GitHub CLI.
+
+
+2. ОБНОВИТЬ ВРЕМЕННЫЙ YC_TOKEN
+------------------------------
+
+yc iam create-token | gh secret set YC_TOKEN -R Ilia2704/otus-iac-cicd-demo
+
+Создаёт новый IAM-токен и сразу сохраняет его в GitHub Actions Secret.
+Токен не выводится в терминал и не попадает в Git.
+
+
+3A. ЛОКАЛЬНЫЕ QUALITY CHECKS
+----------------------------
+
+terraform -chdir=infra fmt -check -recursive
+terraform -chdir=infra init -input=false
+terraform -chdir=infra validate
+
+/opt/homebrew/bin/uv run --with-requirements tests/requirements.txt pytest -q tests/test_unit.py
+
+Проверяет формат и корректность Terraform, затем запускает unit-тесты.
+Эти команды не создают ресурсы в облаке.
+terraform plan и terraform apply выполняются внутри GitHub Actions, где
+хранится state проекта. Локальный terraform apply для этого демо не нужен.
+
+
+3B. КОМАНДЫ TERRAFORM PLAN И APPLY
+---------------------------------
+
+Ниже команды, которые выполняет CI внутри каталога infra:
+
+terraform plan -input=false -out=tfplan
+terraform apply -auto-approve tfplan
+terraform output vm_external_ip
+terraform output bucket_name
+
+terraform plan показывает, какие ресурсы будут созданы или изменены, и
+сохраняет утверждённый план в tfplan. terraform apply применяет именно этот
+план. terraform output показывает IP приложения и имя bucket после apply.
+
+В этом проекте не запускайте эти команды локально после CI/CD: Terraform
+state хранится в GitHub Actions cache. Локальный apply создаст отдельный state.
+Для демонстрации запускайте deploy через push или workflow_dispatch, а
+Terraform plan/apply показывайте в логе GitHub Actions.
+
+
+4A. ОСНОВНОЙ CI/CD: COMMIT И PUSH
+---------------------------------
+
+git status
+git add .
+git commit -m "Run demo deployment"
+git push origin main
+
+Push в main автоматически запускает полный CI/CD:
+
+validate -> tests -> Docker build -> terraform plan -> terraform apply
+-> deploy FastAPI -> real Qwen smoke test
+
+Если изменений для commit нет, используйте ручной deploy из раздела 4B.
+Не запускайте 4A и 4B одновременно.
+
+
+4B. РУЧНОЙ DEPLOY БЕЗ НОВОГО COMMIT
+-----------------------------------
+
+gh workflow run ci-cd.yml \
+  -R Ilia2704/otus-iac-cicd-demo \
+  --ref main \
+  -f operation=deploy
+
+Запускает тот же полный pipeline вручную для текущего commit в main.
+
+
+5. ПОСМОТРЕТЬ PIPELINE
+----------------------
+
+gh run list -R Ilia2704/otus-iac-cicd-demo --workflow ci-cd.yml --limit 5
+
+RUN_ID=$(gh run list -R Ilia2704/otus-iac-cicd-demo --workflow ci-cd.yml --limit 1 --json databaseId --jq '.[0].databaseId')
+
+echo "$RUN_ID"
+gh run watch "$RUN_ID" -R Ilia2704/otus-iac-cicd-demo
+gh run view "$RUN_ID" -R Ilia2704/otus-iac-cicd-demo --log
+
+gh run view "$RUN_ID" -R Ilia2704/otus-iac-cicd-demo --log | rg 'Plan:|Apply complete|Outputs:'
+
+Первая команда показывает последние запуски. Затем RUN_ID получает номер
+самого свежего запуска, run watch следит за ним, а run view показывает
+полный лог, включая terraform plan/apply и smoke test.
+Последняя команда отдельно показывает основные строки plan/apply.
+
+
+6. ПОСМОТРЕТЬ СОЗДАННУЮ ИНФРАСТРУКТУРУ
+--------------------------------------
+
+yc compute instance describe otus-qwen-vm
+yc compute disk describe otus-qwen-disk
+yc vpc network describe otus-qwen-network
+yc vpc subnet describe otus-qwen-subnet
+yc vpc security-group describe otus-qwen-sg
+yc storage bucket describe otus-iac-cicd-demo
+
+Это read-only describe-проверки созданных Terraform ресурсов.
+
+
+7. ПОЛУЧИТЬ ВНЕШНИЙ IP ПРИЛОЖЕНИЯ
+---------------------------------
+
+VM_IP=$(yc compute instance list --format json | jq -r '.[] | select(.name == "otus-qwen-vm") | .network_interfaces[0].primary_v4_address.one_to_one_nat.address')
+
+echo "$VM_IP"
+
+Находит публичный IP созданной VM и сохраняет его в переменную VM_IP.
+
+
+8. ВЫЗВАТЬ ПРИЛОЖЕНИЕ
+---------------------
+
+curl -sS "http://$VM_IP:8000/health" | jq
+
+Проверка FastAPI. Ожидаемый ответ:
+{"status":"ok"}
+
+curl -sS -X POST "http://$VM_IP:8000/sentiment" \
+  -H 'Content-Type: application/json' \
+  -d '{"text":"This is good."}' | jq
+
+Положительный запрос. Ожидаемый ответ:
+{"label":"POSITIVE"}
+
+curl -sS -X POST "http://$VM_IP:8000/sentiment" \
+  -H 'Content-Type: application/json' \
+  -d '{"text":"This is bad."}' | jq
+
+Отрицательный запрос. Ожидаемый ответ:
+{"label":"NEGATIVE"}
+
+Запрос проходит по цепочке:
+curl -> FastAPI:8000 -> Ollama:11434 -> qwen3:0.6b
+
+
+9. ПОКАЗАТЬ DOCKER И МОДЕЛЬ НА VM
+--------------------------------
+
+ssh -i ~/.ssh/otus-github-actions ubuntu@"$VM_IP"
+
+sudo docker ps
+sudo docker exec ollama ollama list
+sudo docker volume inspect ollama-data
+exit
+
+Показывает контейнеры FastAPI/Ollama и модель qwen3:0.6b.
+Модель хранится на диске VM в Docker volume ollama-data, а не в S3.
+
+
+10. ПОСМОТРЕТЬ S3-CОВМЕСТИМОЕ ХРАНИЛИЩЕ
+--------------------------------------
+
+yc storage bucket list
+yc storage bucket describe otus-iac-cicd-demo
+
+Показывает Object Storage bucket. В этом демо bucket создаётся пустым:
+приложение и модель его не используют.
+
+
+11. УДАЛИТЬ ОБЛАЧНЫЕ РЕСУРСЫ ПОСЛЕ ДЕМО
+---------------------------------------
+
+gh workflow run ci-cd.yml \
+  -R Ilia2704/otus-iac-cicd-demo \
+  --ref main \
+  -f operation=destroy
+
+gh run list -R Ilia2704/otus-iac-cicd-demo --workflow ci-cd.yml --limit 5
+
+RUN_ID=$(gh run list -R Ilia2704/otus-iac-cicd-demo --workflow ci-cd.yml --event workflow_dispatch --limit 1 --json databaseId --jq '.[0].databaseId')
+
+echo "$RUN_ID"
+gh run watch "$RUN_ID" -R Ilia2704/otus-iac-cicd-demo
+
+Terraform удаляет только ресурсы этого проекта. GitHub-репозиторий,
+commits и GitHub Actions Secrets сохраняются.
+
+
+12. ПРОВЕРИТЬ ОЧИСТКУ
+---------------------
+
+yc compute instance list
+yc compute disk list
+yc vpc network list
+yc vpc subnet list
+yc vpc security-group list
+yc storage bucket list
+
+После успешного destroy ресурсы демо отсутствуют в списках.
