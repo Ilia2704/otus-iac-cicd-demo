@@ -1,0 +1,13 @@
+flowchart LR
+    G[GitHub Actions] -->|terraform apply| YC[Yandex Cloud]
+    YC --> VPC[VPC + Subnet]
+    YC --> VM[Compute VM 4 vCPU / 8 GB]
+    YC --> S3[Object Storage bucket]
+    YC --> IAM[Service Account + storage.editor]
+    VM --> D[Docker]
+    D --> O[Ollama]
+    O --> Q[Qwen3 0.6B]
+    D --> A[FastAPI sentiment service]
+    A -->|private Docker network| O
+    G -->|Docker image via SSH| A
+    G -->|real smoke requests| A

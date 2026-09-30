@@ -1,0 +1,20 @@
+#cloud-config
+package_update: true
+packages:
+  - docker.io
+
+runcmd:
+  - systemctl enable --now docker
+  - docker network create ai-demo || true
+  - docker volume create ollama-data
+  - docker rm -f ollama || true
+  - >-
+    docker run -d
+    --name ollama
+    --restart unless-stopped
+    --network ai-demo
+    -v ollama-data:/root/.ollama
+    ollama/ollama
+  - sh -c 'for i in $(seq 1 60); do docker exec ollama ollama list && exit 0; sleep 2; done; exit 1'
+  - docker exec ollama ollama pull qwen3:0.6b
+  - docker exec ollama ollama list
